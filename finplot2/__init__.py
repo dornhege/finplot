@@ -54,8 +54,14 @@ epoch_period = 1e30
 windows = []
 
 # TODO
+# Check datasrc and its deps/axis items
+#
 # Create FinPlotItem(pg.PlotItem) to avoid monkey patching the functions in?
 # - Would clash with the FinPlotItem that isn't a PlotItem in FinPlot.
+# - That should have been named FinGraphicsObject, renaming would work, but
+#   pulling in more code might run into things like isinstance(..., FinPlotItem)
+#   accidentally
+#
 # Goals:
 # 1. Open a window/viewbox and check zooming, etc.
 # 2. Implement one simple plotting function (candlestick or plot default)
@@ -452,12 +458,10 @@ class YAxisItem(pg.AxisItem):
         """
         if self.hide_strings:
             return []
-        xform = self.vb.yscale.xform
-        return [self.next_fmt % xform(value) for value in values]
+        return [self.next_fmt % value for value in values]
 
     def _fmt_values(self, vs):
-        xform = self.vb.yscale.xform
-        gs = ["%g" % xform(v) for v in vs[-1][1]]
+        gs = ["%g" % v for v in vs[-1][1]]
         if not gs:
             return vs
         if any(["e" in g for g in gs]):
