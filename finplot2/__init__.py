@@ -1,30 +1,37 @@
-from collections import defaultdict
-from dateutil.tz import tzlocal
-from datetime import datetime, timezone
-from math import ceil, floor, fmod
+from math import ceil, floor
 from typing import Optional
+from collections import defaultdict
+from datetime import datetime
+from dateutil.tz import tzlocal
+
 import numpy as np
 import pandas as pd
+
 import pyqtgraph as pg
 from pyqtgraph import QtCore, QtGui
-
 from PyQt5.QtCore import Qt, QEvent
 
 print("LOADING FINPLOT 2")
 
-foreground = "#000"
-background = "#fff"
+# The default theme used to created plots
+theme = {
+    "foreground": "#000",
+    "background": "#fff",
+    "odd_plot_background": "#eaeaea",
+}
+
 # axis_height_factor determines the y-stretch for the n-th axis object in a
 # FinWindow. When resizing the n-th axis is displayed a factor of
 # axis_height_factor[n] larger than the others. A default is 1 for each axis.
 axis_height_factor = defaultdict(lambda: 1)
 axis_height_factor.update({0: 2})
+
+
 timestamp_format = "%Y-%m-%d %H:%M:%S.%f"
 display_timezone = tzlocal()  # default to local
 truncate_timestamp = True
 winx, winy, winw, winh = 300, 150, 800, 400
 win_recreate_delta = 30
-
 # format: mode, min-duration, pd-freq-fmt, tick-str-len
 time_splits = [
     ("years", 2 * 365 * 24 * 60 * 60, "YS", 4),
@@ -41,15 +48,14 @@ time_splits = [
     ("seconds", 3, "s", 19),
     ("milliseconds", 0, "ms", 23),
 ]
-
-windows = []  # no gc
 epoch_period = 1e30
 
+# All FinWindow instances created from this module
+windows = []
+
 # TODO
-# Make a configuration dict(s)
-# Cleanup imports for consistency
-# Document global/module variables (are there module scope variables)
-# Try to understand/document code snippets that need it - beyond doc all funcs
+# Create FinPlotItem(pg.PlotItem) to avoid monkey patching the functions in?
+# - Would clash with the FinPlotItem that isn't a PlotItem in FinPlot.
 # Goals:
 # 1. Open a window/viewbox and check zooming, etc.
 # 2. Implement one simple plotting function (candlestick or plot default)
@@ -132,14 +138,15 @@ class FinViewBox(pg.ViewBox):
         self.setRange(QtCore.QRectF(pg.Point(0, 0), pg.Point(1, 1)))
 
 
-# These functions smell. They probably shouldn't exist or be factored out
-# somewhere. Ideally covered by standard python/pandas functions.
-# Keep for now:
+# Check DataSrc and how it deals with times/timestamps/indices:
 # This might boil down to understanding how the x-axis works,
 # how items are inserted (by x-axis position or by index => Gap issue)
 # what an x-axis entry even is (index, timestamp, float [s]?)
 # or just how an x-axis item/tick is shown as a string
-# If this is really needed (and understood why), maybe factor out into a module
+#
+# Keep for now:
+# They probably shouldn't exist or be factored out somewhere. Ideally covered by standard python/pandas functions.
+# If these functions are really needed (and understood why), maybe factor out into a module
 # with 1-2 public functions. No need to spam this main module
 
 
@@ -486,7 +493,7 @@ def candlestick_ochl(
 
 def create_plot(title="Finance Plot", rows=1) -> list[pg.PlotItem]:
     """Creates a new FinWindow with `rows` PlotItems in it."""
-    pg.setConfigOptions(foreground=foreground, background=background)
+    pg.setConfigOptions(foreground=theme["foreground"], background=theme["background"])
     window = FinWindow(title)
     windows.append(window)
     axs = _create_plot_items(rows=rows)
@@ -572,7 +579,7 @@ def _create_timestamp_plot(
     # ax.expand = partial(_ax_expand, ax)
     # ax.prev_ax = prev_ax
     # ax.win_index = index
-    # if index%2:
-    #    viewbox.setBackgroundColor(odd_plot_background)
+    if index % 2:
+        viewbox.setBackgroundColor(theme["odd_plot_background"])
     viewbox.setParent(ax)
     return ax
