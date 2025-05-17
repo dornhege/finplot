@@ -26,7 +26,9 @@ import pandas as pd
 import pyqtgraph as pg
 from pyqtgraph import QtCore, QtGui
 
+from PyQt5.QtCore import Qt, QEvent
 
+print("LOADING FINPLOT X")
 
 # appropriate types
 ColorMap = pg.ColorMap
@@ -568,9 +570,6 @@ class FinWindow(pg.GraphicsLayoutWidget):
     def axs(self):
         return [ax for ax in self.ci.items if isinstance(ax, pg.PlotItem)]
 
-    def autoRangeEnabled(self):
-        return [True, True]
-
     def close(self):
         self.closing = True
         _savewindata(self)
@@ -817,6 +816,7 @@ class FinViewBox(pg.ViewBox):
         self.win = win
         self.init_steps = init_steps
         self.yscale = yscale
+        self._autoscale_y = True
         self.v_zoom_scale = v_zoom_scale
         self.master_viewbox = None
         self.rois = []
@@ -841,7 +841,7 @@ class FinViewBox(pg.ViewBox):
         self.standalones = set()
         self.updating_linked = False
         self.set_datasrc(None)
-        self.setMouseEnabled(x=True, y=False)
+        self.setMouseEnabled(x=True, y=True)
         self.setRange(QtCore.QRectF(pg.Point(0, 0), pg.Point(1, 1)))
 
     def set_datasrc(self, datasrc):
@@ -897,7 +897,7 @@ class FinViewBox(pg.ViewBox):
             self.mouseLeftDrag(ev, axis)
         elif ev.button() == QtCore.Qt.MouseButton.MiddleButton:
             self.mouseMiddleDrag(ev, axis)
-        elif ev.button() == QtCore.Qt.MouseButton.RightButton:
+        elif ev.button() == QtCore.Qt.MouseButton.RightButton and ev.modifiers() & Qt.ControlModifier:
             self.mouseRightDrag(ev, axis)
         else:
             super().mouseDragEvent(ev, axis)
@@ -1159,7 +1159,11 @@ class FinViewBox(pg.ViewBox):
             return
         _y0 = self.yscale.invxform(y0, verify=True)
         _y1 = self.yscale.invxform(y1, verify=True)
-        self.setRange(QtCore.QRectF(pg.Point(x0, _y0), pg.Point(x1, _y1)), padding=0)
+        print("set_range")
+        if self._autoscale_y:
+          self.setRange(QtCore.QRectF(pg.Point(x0, _y0), pg.Point(x1, _y1)), padding=0)
+        else:
+          self.setXRange(x0, x1, padding=0)
         self.zoom_changed()
         return True
 
@@ -2027,6 +2031,7 @@ def refresh():
 
 
 def show(qt_exec=True):
+    print("SHOWING Z")
     refresh()
     for win in windows:
         if isinstance(win, FinWindow) or qt_exec:
@@ -2166,6 +2171,7 @@ def _clear_timers():
 def _add_timestamp_plot(master, prev_ax, viewbox, index, yscale):
     native_win = isinstance(master, pg.GraphicsLayoutWidget)
     if native_win and prev_ax is not None:
+        print(f"SV, {type(prev_ax)=} {hasattr(prev_ax, 'set_visible')=}")
         prev_ax.set_visible(xaxis=False) # hide the whole previous axis
     axes = {'bottom': _create_axis(pos='x', vb=viewbox, orientation='bottom'),
             'right':  _create_axis(pos='y', vb=viewbox, orientation='right')}
@@ -2712,6 +2718,10 @@ def _key_pressed(vb, ev):
         _repaint_candles()
     elif ev.key() == QtCore.Qt.Key.Key_Escape and key_esc_close:
         vb.win.close()
+    elif ev.key() == QtCore.Qt.Key.Key_A:
+        print("A")
+        vb._autoscale_y = not vb._autoscale_y
+        #vb.v_autozoom = vb._autoscale_y
     else:
         return False
     return True

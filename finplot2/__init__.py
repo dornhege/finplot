@@ -49,6 +49,7 @@ time_splits = [
     ("milliseconds", 0, "ms", 23),
 ]
 epoch_period = 1e30
+epoch_timestamp = pd.Timestamp("1970-01-01", tz="UTC")
 
 # All FinWindow instances created from this module
 windows = []
@@ -68,6 +69,266 @@ windows = []
 #     Maybe plot default iff that doesn't require a datasrc
 # Can we fix the missing functions from parents in LSP - due to hacks of importing them down?
 # Then: Compare/add missing functionality from finplot. First for basic charts
+
+# Really make sure somewhere dealing explicitly with tz/non-tz data.
+
+
+class PandasDataSource:
+    """Wraps a pandas dataframe for direct access to plotting.
+
+    The maintained df has a DatetimeIndex.
+
+    Its first column is a column named 'timestamp' containing the seconds since epoch
+    as a time instant.
+
+    Further data columns contain plottable data:
+    Candle sticks: open, close, hi, lo - in that order.
+    Volume bars: open, close, volume - in that order.
+    Other: one or more Y-columns.
+    """
+
+    df: pd.DataFrame
+    timecol: str = "timestamp"
+    # Offset of preceeding columns until data columns start
+    col_data_offset: int = 1
+
+    def __init__(self, df):
+        """Initializes a PandasDataSource from a DataFrame.
+
+        A valid df must either have a DatetimeIndex or its first column must be a
+        series of pandas timestamps. In the latter case the timestamps will be
+        used as the index.
+
+        Following that are further data columns depending on the use case.
+        """
+        self.df = df.copy()
+        # Ensure there is a DatetimeIndex, if not create it from the first
+        # columns of timestamps
+        if not isinstance(self.df.index, pd.DatetimeIndex):
+            datetime_column = self.df.columns[0]
+            if not pd.api.types.is_datetime64_dtype(self.df[datetime_column]):
+                raise ValueError(
+                    "self.df does not have a DatetimeIndex and first column is not a series of datetime64."
+                )
+            self.df.set_index(datetime_column, inplace=True)
+        assert isinstance(self.df.index, pd.DatetimeIndex)
+        if self.df.index.tz is None:
+            print("Warning: No timezone information given. Assuming 'UTC'")
+            self.df = self.df.tz_localize("UTC")
+        self.df.sort_index(inplace=True)
+
+        if df.columns.empty:
+            raise ValueError("Dataset was empty")
+        if "timestamp" in df.columns:
+            raise ValueError(
+                "df must not contain a 'timestamp' column. This is to be created automatically. Please rename if needed"
+            )
+
+        # Add timestamp column as delta to epoch in seconds
+        orig_data_columns = [cn for cn in df.columns]
+        self.df[self.timecol] = (self.df.index - epoch_timestamp) // pd.Timedelta("1s")
+        self.df = self.df.reindex(columns=[self.timecol] + orig_data_columns)
+
+        print(self.df)
+        print(self.df.info())
+        # # setup data for joining data sources and zooming
+        # self.scale_cols = [
+        #     i
+        #     for i in range(self.col_data_offset, len(self.df.columns))
+        #     if self.df.iloc[:, i].dtype != object
+        # ]
+        # self.cache_hilo = OrderedDict()
+        # self._period = None
+        # self._smooth_time = None
+        # self.is_sparse = (
+        #     self.df[self.df.columns[self.col_data_offset]].isnull().sum().max()
+        #     > len(self.df) // 2
+        # )
+
+    # TODO create/delete/rename/document all APIs based on if they're likely needed
+    # or not. If not remove all. Target is minimal plotting for now.
+    # Then: Got to creating a PandasDataSource and call that from a main public plot
+    # function as a first step.
+    # After: Start looking into how this is plotted. Possibly without all the
+    # caching optimizations, although useful in general. Just a correct plot for
+    # now.
+    # Plotting Modes: By datetime vs. by index
+
+    @property
+    def period_ns(self):
+        if len(self.df) <= 1:
+            return 1
+        if not self._period:
+            self._period = self.calc_period_ns()
+        return self._period
+
+    def calc_period_ns(self, n=100, delta=lambda dt: int(dt.median())):
+        dtimes = self.df[self.timecol].iloc[0:n].diff()
+        dtimes = dtimes[dtimes != 0]
+        return delta(dtimes) if len(dtimes) > 1 else 1
+
+    @property
+    def index(self):
+        return self.df.index
+
+    @property
+    def x(self):
+        return self.df[self.timecol]
+
+    @property
+    def y(self):
+        col = self.df.columns[self.col_data_offset]
+        return self.df[col]
+
+    @property
+    def z(self):
+        col = self.df.columns[self.col_data_offset + 1]
+        return self.df[col]
+
+    @property
+    def xlen(self):
+        return len(self.df)
+
+    def calc_significant_decimals(self, full):
+        def float_round(f):
+            return float("%.3e" % f)  # 0.00999748 -> 0.01
+
+        def remainder_ok(a, b):
+            c = a % b
+            if c / b > 0.98:  # remainder almost same as denominator
+                c = abs(c - b)
+            return c < b * 0.6  # half is fine
+
+        def calc_sd(ser):
+            ser = ser.iloc[:1000]
+            absdiff = ser.diff().abs()
+            absdiff[absdiff < 1e-30] = np.float32(1e30)
+            smallest_diff = absdiff.min()
+            if smallest_diff > 1e29:  # just 0s?
+                return 0
+            smallest_diff = float_round(smallest_diff)
+            absser = ser.iloc[:100].abs()
+            for _ in range(2):  # check if we have a remainder that is a better epsilon
+                remainder = [fmod(v, smallest_diff) for v in absser]
+                remainder = [v for v in remainder if v > smallest_diff / 20]
+                if not remainder:
+                    break
+                smallest_diff_r = min(remainder)
+                if (
+                    smallest_diff * 0.05 < smallest_diff_r < smallest_diff * 0.7
+                    and remainder_ok(smallest_diff, smallest_diff_r)
+                ):
+                    smallest_diff = smallest_diff_r
+                else:
+                    break
+            return smallest_diff
+
+        def calc_dec(ser, smallest_diff):
+            if not full:  # line plots usually have extreme resolution
+                absmax = ser.iloc[:300].abs().max()
+                s = "%.3e" % absmax
+            else:  # candles
+                s = "%.2e" % smallest_diff
+            base, _, exp = s.partition("e")
+            base = base.rstrip("0")
+            exp = -int(exp)
+            max_base_decimals = min(5, -exp + 2) if exp < 0 else 3
+            base_decimals = max(0, min(max_base_decimals, len(base) - 2))
+            decimals = exp + base_decimals
+            decimals = max(0, min(max_decimals, decimals))
+            if not full:  # apply grid for line plots only
+                smallest_diff = max(10 ** (-decimals), smallest_diff)
+            return decimals, smallest_diff
+
+        # first calculate EPS for series 0&1, then do decimals
+        sds = [calc_sd(self.y)]  # might be all zeros for bar charts
+        if len(self.scale_cols) > 1:
+            sds.append(calc_sd(self.z))  # if first is open, this might be close
+        sds = [sd for sd in sds if sd > 0]
+        big_diff = max(sds)
+        smallest_diff = min(
+            [sd for sd in sds if sd > big_diff / 100]
+        )  # filter out extremely small epsilons
+        ser = self.z if len(self.scale_cols) > 1 else self.y
+        return calc_dec(ser, smallest_diff)
+
+    def update_init_x(self, init_steps):
+        self.init_x0, self.init_x1 = _xminmax(
+            self, x_indexed=True, init_steps=init_steps
+        )
+
+    def closest_time(self, x):
+        return self.df.loc[int(x), self.timecol]
+
+    def timebased(self):
+        return self.df.iloc[-1, 0] > 1e7
+
+    def is_smooth_time(self):
+        if self._smooth_time is None:
+            # less than 1% time delta is smooth
+            self._smooth_time = (
+                self.timebased()
+                and (
+                    np.abs(
+                        np.diff(self.x.values[1:100])[1:] // (self.period_ns // 1000)
+                        - 1000
+                    )
+                    < 10
+                ).all()
+            )
+        return self._smooth_time
+
+    def hilo(self, x0, x1):
+        """Return five values in time range: t0, t1, highest, lowest, number of rows."""
+        if x0 == x1:
+            x0 = x1 = int(x1)
+        else:
+            x0, x1 = int(x0 + 0.5), int(x1)
+        query = "%i,%i" % (x0, x1)
+        if query not in self.cache_hilo:
+            v = self.cache_hilo[query] = self._hilo(x0, x1)
+        else:
+            # re-insert to raise prio
+            v = self.cache_hilo[query] = self.cache_hilo.pop(query)
+        if len(self.cache_hilo) > 100:  # drop if too many
+            del self.cache_hilo[next(iter(self.cache_hilo))]
+        return v
+
+    def _hilo(self, x0, x1):
+        df = self.df.loc[x0:x1, :]
+        if not len(df):
+            return 0, 0, 0, 0, 0
+        t0 = df[self.timecol].iloc[0]
+        t1 = df[self.timecol].iloc[-1]
+        valcols = df.columns[self.scale_cols]
+        hi = df[valcols].max().max()
+        lo = df[valcols].min().min()
+        return t0, t1, hi, lo, len(df)
+
+    def rows(self, colcnt, x0, x1, yscale, lod=True, resamp=None):
+        df = self.df.loc[x0:x1, :]
+        if self.is_sparse:
+            df = df.loc[df.iloc[:, self.col_data_offset].notna(), :]
+        origlen = len(df)
+        return self._rows(df, colcnt, yscale=yscale, lod=lod, resamp=resamp), origlen
+
+    def _rows(self, df, colcnt, yscale, lod, resamp):
+        colcnt -= 1  # time is always implied
+        colidxs = [0] + list(range(self.col_data_offset, self.col_data_offset + colcnt))
+        if lod and len(df) > lod_candles:
+            if resamp:
+                df = self._resample(df, colcnt, resamp)
+                colidxs = None
+            else:
+                df = df.iloc[:: len(df) // lod_candles]
+        dfr = df.iloc[:, colidxs] if colidxs else df
+        if yscale.scaletype == "log" or yscale.scalef != 1:
+            dfr = dfr.copy()
+            for i in range(1, colcnt + 1):
+                colname = dfr.columns[i]
+                if dfr[colname].dtype != object:
+                    dfr[colname] = yscale.invxform(dfr.iloc[:, i])
+        return dfr
 
 
 class FinWindow(pg.GraphicsLayoutWidget):
@@ -477,10 +738,8 @@ class YAxisItem(pg.AxisItem):
         return vs
 
 
-def candlestick_ochl(
-    datasrc, draw_body=True, draw_shadow=True, candle_width=0.6, ax=None
-):
-    pass
+def candlestick_ochl(df, draw_body=True, draw_shadow=True, candle_width=0.6, ax=None):
+    ds = PandasDataSource(df)
 
 
 #    ax = _create_plot(ax=ax, maximize=False)

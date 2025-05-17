@@ -22,8 +22,8 @@ fplt.volume_ocv(btc[['ma200','ma50','one']], candle_width=1, ax=ax1.overlay(scal
 daily_ret = btc.Close.pct_change()*100
 fplt.plot(daily_ret, width=3, color='#000', legend='Daily returns %', ax=ax2)
 
-fplt.add_legend('Daily % returns histogram', ax=ax3)
-fplt.hist(daily_ret, bins=60, ax=ax3)
+#fplt.add_legend('Daily % returns histogram', ax=ax3)
+#fplt.hist(daily_ret, bins=60, ax=ax3)
 
 fplt.add_legend('Yearly returns in %', ax=ax4)
 fplt.bar(btc.Close.resample('YE').last().pct_change().dropna()*100, ax=ax4)
